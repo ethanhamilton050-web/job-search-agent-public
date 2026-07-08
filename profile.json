@@ -1,0 +1,100 @@
+{
+  "_comment": "SAMPLE profile — replace with your own. This file ships with fictional placeholder data so the agent runs out of the box. Your real profile is personal data; keep it local.",
+  "name": "Jane Doe",
+  "contact": {
+    "email": "jane.doe@example.com",
+    "phone": "555-555-0100"
+  },
+  "summary": "",
+  "skills": [
+    "Bloomberg Terminal",
+    "Microsoft Excel",
+    "Pivot Tables",
+    "Financial Analysis",
+    "Financial Modeling",
+    "Portfolio Analysis",
+    "Valuation Analysis",
+    "Investment Research",
+    "Financial Statement Analysis",
+    "Audit",
+    "Compliance",
+    "Reconciliation",
+    "Python"
+  ],
+  "experience": [
+    {
+      "company": "Example Wealth Advisors – City, ST",
+      "title": "Registered Representative",
+      "dates": "Jan 2025 – Present",
+      "bullets": [
+        "Helped clients evaluate retirement plans, investment portfolios, and long-term financial priorities through planning reviews",
+        "Reviewed outside holdings and existing coverage to identify allocation issues and planning gaps",
+        "Performed comparative analysis and financial calculations to evaluate options against client goals and risk tolerance"
+      ]
+    },
+    {
+      "company": "Example CPA Firm – City, ST",
+      "title": "Audit Accountant",
+      "dates": "Dec 2022 – Jan 2025",
+      "bullets": [
+        "Conducted audit and compliance work for 25+ financial institutions, including institutions with assets exceeding $100 million",
+        "Resolved a cash clearing account with multiple years of unreconciled activity by tracing roughly 3,000 transactions across a 500+ line reconciliation",
+        "Identified and corrected issues involving loan documentation, interest calculations, and reconciliations to improve audit readiness and compliance standards"
+      ]
+    },
+    {
+      "company": "University Student Investment Fund",
+      "title": "Associate Director",
+      "dates": "May 2022 – Jun 2022",
+      "bullets": [
+        "Prepared weekly performance updates by combining fund results, market developments, and analyst research",
+        "Contributed to a value fund that outperformed the S&P 500 during the 2022 bear market through sector-level analysis and ongoing monitoring",
+        "Supported management of multiple investment funds across distinct Value, Core, ESG, and Hedge strategies"
+      ]
+    }
+  ],
+  "education": [
+    "Example University – City, ST",
+    "B.S. in Finance | Cum Laude | Major GPA: 3.8 | May 2023",
+    "Relevant Coursework: Options and Derivatives, Financial Modeling, Technical Analysis",
+    "Licenses & Certifications: SIE | FINRA Series 6 | FINRA Series 63"
+  ],
+  "raw_text": "Jane Doe\n555-555-0100 | jane.doe@example.com\nEDUCATION\nExample University – City, ST\nB.S. in Finance | Cum Laude | Major GPA: 3.8 | May 2023\nTECHNICAL SKILLS\nBloomberg Terminal | Microsoft Excel | Financial Modeling | Portfolio Analysis | Valuation Analysis | Investment Research\nPROFESSIONAL EXPERIENCE\nExample Wealth Advisors – City, ST\tJan 2025 – Present\nRegistered Representative\nExample CPA Firm – City, ST\tDec 2022 – Jan 2025\nAudit Accountant\n",
+  "targets": {
+    "titles": [
+      "Financial Analyst",
+      "Investment Analyst",
+      "Equity Research Analyst",
+      "Research Analyst",
+      "Portfolio Analyst",
+      "Audit Associate",
+      "AI Analyst",
+      "Automation Analyst",
+      "Business Analyst"
+    ],
+    "locations": [
+      "New York, NY",
+      "New Jersey",
+      "Remote"
+    ],
+    "remote_ok": true,
+    "level": "early-career to mid-level (0-5 yrs)",
+    "work_authorization": "US authorized / no sponsorship needed",
+    "salary_floor": 60000,
+    "salary_required": true,
+    "keywords": [
+      "financial modeling",
+      "valuation",
+      "portfolio",
+      "equity research",
+      "investment research",
+      "financial statement analysis",
+      "bloomberg",
+      "excel",
+      "audit",
+      "python",
+      "automation",
+      "artificial intelligence"
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "_comment": "Copy to workday_answers.json. These override/extend what is derived from your resume. Leave 'decline' for self-ID if preferred.",
+  "_comment_creds": "ONE reusable Workday login. The filler signs in with these on every employer, or creates the account if it doesn't exist yet. Use a real inbox you can verify from. Defaults to your resume email.",
+  "workday_email": "",
+  "workday_password": "",
+  "address_line1": "",
+  "city": "",
+  "state": "",
+  "postal_code": "",
+  "country": "United States of America",
+  "linkedin_url": "",
+  "github_url": "",
+  "how_did_you_hear": "Company website",
+  "_comment_salary": "Workday salary fields usually require a NUMBER \u2014 plain integer, no $, commas, or text (e.g. 80000). Set your ask.",
+  "salary_expectation": 80000,
+  "work_authorized": true,
+  "needs_sponsorship": false,
+  "_comment_screening_facts": "Hard facts the honesty guardrail uses to auto-answer universal screening questions. Leave a field OUT (or empty) and that question is ALWAYS routed to you instead of guessed.",
+  "is_over_18": true,
+  "is_veteran": false,
+  "_comment_education": "Optional: structured education so the filler can fill school/degree/field/GPA. If omitted it best-effort fills the school name only and you finish the rest.",
+  "education_structured": [
+    {
+      "school": "",
+      "degree": "",
+      "field": "",
+      "gpa": "",
+      "end_year": ""
+    }
+  ],
+  "voluntary_self_id": {
+    "gender": "decline",
+    "race_ethnicity": "decline",
+    "veteran_status": "decline",
+    "disability_status": "decline"
+  },
+  "screening_answers": {
+    "willing_to_relocate": "Yes",
+    "earliest_start_date": "2 weeks",
+    "require_sponsorship": "No"
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "_comment": "Copy to config.json and edit. Non-secret run params only; secrets go in .env.",
+
+  "targets": {
+    "titles": [
+      "Financial Analyst", "Investment Analyst", "Equity Research Analyst",
+      "Research Analyst", "Portfolio Analyst", "Financial Advisor",
+      "Wealth Advisor", "Audit Associate", "AI Analyst",
+      "Automation Analyst", "Business Analyst"
+    ],
+    "locations": ["Chester, NJ", "New Jersey", "New York, NY", "Philadelphia, PA", "Pittsburgh, PA"],
+    "remote_ok": false,
+    "work_authorization": "US authorized / no sponsorship needed",
+    "salary_floor": 60000,
+    "keywords": [
+      "financial modeling", "valuation", "portfolio", "equity research",
+      "investment research", "financial statement analysis", "bloomberg",
+      "excel", "audit", "python", "automation", "artificial intelligence"
+    ]
+  },
+
+  "sources": {
+    "_note": "Verified live Greenhouse boards (finance/fintech). Add/remove freely.",
+    "greenhouse_boards": [
+      "affirm", "brex", "sofi", "robinhood", "betterment", "carta", "chime",
+      "gemini", "marqeta", "mercury", "alpaca", "fireblocks", "current"
+    ],
+    "lever_boards": [],
+    "_workday_note": "Paste any company's Workday CAREERS url (the one with myworkdayjobs.com). We read its public job feed; jobs are pre-filtered to your metros.",
+    "workday_sites": [
+      "https://citi.wd5.myworkdayjobs.com/2",
+      "https://pnc.wd5.myworkdayjobs.com/External",
+      "https://spgi.wd5.myworkdayjobs.com/SPGI_Careers",
+      "https://travelers.wd5.myworkdayjobs.com/External"
+    ]
+  },
+
+  "scoring": {
+    "weight_skill_overlap": 0.5,
+    "weight_title_match": 0.3,
+    "weight_keyword_match": 0.2,
+    "penalize_seniority": true,
+    "min_score_to_show": 45
+  }
+}

@@ -1,0 +1,20 @@
+# Core
+python-dotenv>=1.0
+requests>=2.31
+
+# Resume parsing + tailored-resume output (.docx)
+pdfplumber>=0.11
+python-docx>=1.1
+
+# Tracker export
+openpyxl>=3.1
+
+# Dashboard (read-only)
+Flask>=3.0
+
+# Workday autofill (HOST ONLY — install on your Windows machine, not the container):
+#   pip install playwright && playwright install chromium
+# playwright>=1.44
+
+# Dev
+pytest>=8.0

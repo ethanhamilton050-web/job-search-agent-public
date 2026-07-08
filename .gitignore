@@ -1,0 +1,54 @@
+# ============================================================
+#  Hardened .gitignore — applied to every public repo on each
+#  publish run. Blocks secrets, credentials, databases, and any
+#  real input/output data from ever being committed.
+# ============================================================
+
+# Secrets / credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+id_rsa
+id_rsa.*
+*credential*
+*secret*
+*.token
+secrets/
+
+# Databases / data dumps
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Real input / output documents (may contain member or personal data)
+input/*
+!input/README.md
+output/*
+!output/.gitkeep
+!output/.gitignore
+
+# Personal job-search profile (the sample profile.json is committed; a real one is not)
+profile.local.json
+
+# Python / tooling cruft
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.claude/

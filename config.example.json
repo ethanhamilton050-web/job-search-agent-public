@@ -1,0 +1,28 @@
+{
+  "_comment": "Copy to config.json and edit. Non-secret run params only; secrets go in .env.",
+
+  "targets": {
+    "titles": ["Financial Analyst", "Data Analyst", "Business Analyst"],
+    "locations": ["Remote", "New York, NY"],
+    "remote_ok": true,
+    "_note": "work_authorization + salary_floor are advisory: they add a heads-up reason on a match, they do not change the score.",
+    "work_authorization": "US citizen / no sponsorship needed",
+    "salary_floor": 60000,
+    "keywords": ["excel", "sql", "python", "financial modeling"]
+  },
+
+  "sources": {
+    "_note": "Greenhouse/Lever take company slugs (boards.greenhouse.io/<slug>). Workday takes a careers URL (…myworkdayjobs.com/…).",
+    "greenhouse_boards": ["stripe", "databricks"],
+    "lever_boards": ["netflix", "spotify"],
+    "workday_sites": []
+  },
+
+  "scoring": {
+    "weight_skill_overlap": 0.5,
+    "weight_title_match": 0.3,
+    "weight_keyword_match": 0.2,
+    "penalize_seniority": true,
+    "min_score_to_show": 40
+  }
+}
