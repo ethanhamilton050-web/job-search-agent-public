@@ -8,8 +8,26 @@
       "Wealth Advisor", "Audit Associate", "AI Analyst",
       "Automation Analyst", "Business Analyst"
     ],
-    "locations": ["Chester, NJ", "New Jersey", "New York, NY", "Philadelphia, PA", "Pittsburgh, PA"],
+    "_locations_note": "Matched as case-insensitive substrings of a job's location. A state token like ', nj' matches ANY New Jersey city; a full 'City, ST' matches that city. Empty list = don't filter by location.",
+    "locations": [
+      ", nj", ", ny", ", pa",
+      "new jersey", "new york", "philadelphia", "pittsburgh", "nyc",
+      "manhattan", "brooklyn", "chester", "morristown", "parsippany",
+      "princeton", "newark", "jersey city", "hoboken", "edison",
+      "paramus", "saddle brook", "fairfield", "philly"
+    ],
     "remote_ok": false,
+    "_exclude_title_terms_note": "Titles containing any of these (substring, case-insensitive) are hidden by default. Leading/trailing spaces scope a bare word (e.g. ' ml ' won't match 'html'). Empty list = hide nothing. This is your early-career finance filter; another user would set their own or clear it.",
+    "exclude_title_terms": [
+      "senior", "sr.", " sr ", " sr,", "staff ", "principal", " lead ", " lead,",
+      "lead ", "director", "vp ", "vp,", "vice president", "head of", "chief",
+      "manager", " mgr",
+      "engineer", "developer", "devops", "site reliability", " sre",
+      "security analyst", "information security", "cybersecurity", "network",
+      "machine learning", " ml ", "full stack", "full-stack", "frontend",
+      "front-end", "backend", "back-end", "ios ", "android", "embedded",
+      "firmware", "account executive", "sales representative"
+    ],
     "work_authorization": "US authorized / no sponsorship needed",
     "salary_floor": 60000,
     "keywords": [

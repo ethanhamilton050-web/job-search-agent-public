@@ -71,6 +71,32 @@ def test_queue_run_launches_when_queued(tmp_path, monkeypatch):
     assert len(calls) == 1  # grinder launched once
 
 
+def test_updated_at_is_shown_in_local_time_not_utc(tmp_path, monkeypatch):
+    """applyqueue stamps rows with SQLite datetime('now') = UTC; the queue page must
+    convert to the user's local time (raw UTC looked hours off). 2026-07-15."""
+    from datetime import datetime, timezone
+
+    import dashboard
+    utc = "2026-07-15 19:00:00"
+    expected = (datetime(2026, 7, 15, 19, 0, tzinfo=timezone.utc)
+                .astimezone().strftime("%Y-%m-%d %H:%M"))
+    assert dashboard.localtime(utc) == expected
+    # non-timestamps pass through untouched, never crash the page
+    assert dashboard.localtime("running") == "running"
+    assert dashboard.localtime(None) == ""
+
+    db = tmp_path / "jobs.db"
+    monkeypatch.setattr(config, "DB_PATH", db)
+    _seed(db)
+    body = dashboard.app.test_client().get("/queue").get_data(as_text=True)
+    conn = database.connect(db)
+    try:
+        raw = conn.execute("SELECT updated_at FROM apply_queue").fetchone()[0]
+    finally:
+        conn.close()
+    assert dashboard.localtime(raw) in body   # the converted stamp is what's rendered
+
+
 def test_queue_run_noop_when_empty(tmp_path, monkeypatch):
     db = tmp_path / "jobs.db"
     monkeypatch.setattr(config, "DB_PATH", db)

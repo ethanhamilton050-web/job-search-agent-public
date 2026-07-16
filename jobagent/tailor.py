@@ -35,17 +35,30 @@ _MULTIPLIER_WORDS = {
     "b": 1_000_000_000,
 }
 
-# Matches: $1.2M, 1,200,000, 1.2 million, 35%, 35 percent, 3x, 2021, '21
-# Word suffixes may be space-separated; single-letter units must be attached and
-# word-bounded so "b" in "budget" is never mistaken for "billion".
+# Matches: $1.2M, 1,200,000, 1.2 million, 35%, 35 percent, $5 mm, 3x, 2021, '21
+# All suffixes (spelled-out words, %, and single/double-letter units) may be
+# space-separated from the digits -- found live, 2026-07-09, by an overnight
+# adversarial audit: only the spelled-out-word alternative used to tolerate a
+# leading space, so "$5 mm" and "35 %" (both extremely common finance
+# shorthand, and this project's own target user is a finance professional)
+# were left un-scaled/un-recognized, causing false-positive "fact changed"
+# validation failures on a truthful, meaning-preserving edit. The trailing \b
+# (word-boundary) already does the job of keeping "b" out of "budget" -- that
+# protection never depended on disallowing a leading space.
 _NUM_RE = re.compile(
     r"""
+    (?P<neg>(?<![\w.,%)\-])-(?=[\d$]))?  # a REAL minus sign: not a date-range/hyphen
+                                   # ('2019-2021', '10-15%', 'T-1'), and glued to
+                                   # what follows so a '- ' list bullet never
+                                   # reads as negative. ponytail: '(12%)'-style
+                                   # accounting negatives aren't parsed; add if
+                                   # they show up in a real resume.
     (?P<currency>\$)?\s*
     (?P<num>\d[\d,]*(?:\.\d+)?)
     (?:
         \s*(?P<word>percent|thousand|million|billion)\b
-      | (?P<sym>%)
-      | (?P<unit>mm|k|m|b|x)\b
+      | \s*(?P<sym>%)
+      | \s*(?P<unit>mm|k|m|b|x)\b
     )?
     """,
     re.IGNORECASE | re.VERBOSE,
@@ -123,6 +136,9 @@ def extract_facts(text: str) -> Counter:
             val = float(raw)
         except ValueError:
             continue
+        if m.group("neg"):
+            val = -val  # "-12" and "12" are DIFFERENT facts; a dropped sign
+            # ("grew by -12" -> "cut ... by 12") must fail the fact-lock.
         word = (m.group("word") or "").lower()
         sym = m.group("sym")
         unit = (m.group("unit") or "").lower()
@@ -207,7 +223,31 @@ def validate(original_text: str, tailored_text: str,
 
     # Entity lock: no brand-new proper nouns (employers, schools, products).
     orig_nouns = {w.lower() for w in _proper_nouns(original_text)}
-    stop = {"the", "a", "an", "i", "we", "led", "managed", "built", "and"}
+    # Common resume action verbs -- a rephrased bullet's OPENING verb is capitalized
+    # by ordinary sentence-initial grammar, not because it's a proper noun, but the
+    # scan below is (deliberately) position-blind so it can't tell the difference.
+    # Found live, 2026-07-09, by an overnight adversarial audit: the old 3-verb stop
+    # list only covered this project's own test fixture, so nearly ANY other
+    # rephrased opening verb -- exactly the kind of edit tailoring is supposed to
+    # do -- triggered a "possibly invented employer/tool" warning on nearly every
+    # pass, risking alert fatigue that could make a human stop reading real ones.
+    # ponytail: a table, not an ontology (same style as _SENIOR/_METRO elsewhere in
+    # this codebase) -- covers the common cases; a genuinely novel verb still warns
+    # once in a while, which is the safe direction to be wrong in.
+    stop = {
+        "the", "a", "an", "i", "we", "and",
+        "led", "managed", "built", "drove", "directed", "increased", "decreased",
+        "reduced", "improved", "developed", "created", "established", "implemented",
+        "launched", "grew", "cut", "streamlined", "negotiated", "coordinated",
+        "executed", "delivered", "achieved", "generated", "optimized", "facilitated",
+        "spearheaded", "oversaw", "administered", "analyzed", "resolved", "reviewed",
+        "produced", "prepared", "conducted", "performed", "contributed",
+        "communicated", "applied", "pitched", "identified", "covered", "helped",
+        "worked", "assisted", "supported", "collaborated", "utilized", "enhanced",
+        "expanded", "strengthened", "maintained", "supervised", "trained",
+        "mentored", "advised", "recommended", "presented", "authored", "designed",
+        "configured", "automated", "deployed", "monitored", "saved",
+    }
     # Tokenize multiword skills ("Amazon Web Services") so each word is recognized
     # against the per-word proper-noun output — else they spuriously warn.
     known = {tok.lower()

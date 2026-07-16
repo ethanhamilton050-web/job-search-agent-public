@@ -125,6 +125,24 @@ varies — run the first one on a new employer with the browser visible and watc
 it logs every field it sets and skips so you can see what to finish by hand.
 **This must run on your host, not the container** (it needs your browser + logins).
 
+## Dashboard extras
+
+- **Screening Answers** (`/answers`) — any question the autofiller can't PROVE an
+  answer to (on any path: Workday questionnaire pages, Workday radio-button
+  screening pages, or Greenhouse/Lever/Ashby forms) is parked here instead of
+  guessed; fill each once and it's reused on every future application that asks
+  it, across employers. The main page shows a "N need you" badge when questions
+  are waiting. Age and work-authorization are answered from your profile
+  automatically, so they won't show up here.
+- **Match Coach** (`/coach/<job id>`, linked as "💡 suggest rewrites" next to a
+  job's missing-skills list) — suggests a truthful rephrase of a resume bullet
+  toward a trait the posting wants but your resume doesn't already say in
+  those words. Every suggestion is checked against the same fact-lock rule the
+  tailoring loop uses (no number/date/$/metric may change), and a suggestion
+  that fails that check is never shown. Click **Apply to my resume** to write
+  an approved rewrite into `profile.json` (your prior version is auto-saved as
+  `profile.json.bak` first) — nothing is ever changed without that click.
+
 ## Tailoring loop in detail
 
 1. `python main.py tailor <id>` prints a self-contained brief (job + your resume

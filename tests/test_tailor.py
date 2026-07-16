@@ -19,6 +19,24 @@ def test_verbiage_only_edit_passes():
     assert res.ok, res.report()
 
 
+def test_rephrased_opening_verbs_do_not_warn():
+    """Regression (found live, 2026-07-09, by an overnight adversarial audit): the
+    old 3-verb stop list only covered this project's own test fixture, so this
+    exact reword (only the opening verbs changed) used to trigger a "possibly
+    invented employer/tool" warning for every rephrased verb -- on nearly every
+    tailoring pass, since rewording the opening verb is exactly what tailoring
+    is for. res.ok already passed before (warnings don't block), so this checks
+    the warnings themselves, not just ok."""
+    tailored = (
+        "Drove a 35% revenue increase across 2 years while owning a $1.2M budget.\n"
+        "Directed a team of 8 at Acme Corp from 2019 to 2021.\n"
+        "Reduced processing time 3x with Python and SQL."
+    )
+    res = tailor.validate(MASTER, tailored)
+    assert res.ok
+    assert not res.warnings, res.report()
+
+
 def test_reformatted_number_still_passes():
     # $1.2M == $1,200,000 ; 35% == 35 percent ; 3x unchanged
     tailored = (
@@ -28,6 +46,25 @@ def test_reformatted_number_still_passes():
     )
     res = tailor.validate(MASTER, tailored)
     assert res.ok, res.report()
+
+
+def test_space_separated_unit_shorthand_still_passes():
+    """Regression (found live, 2026-07-09, by an overnight adversarial audit):
+    "$5 mm" (space before the unit) used to fail to scale at all, so rewording
+    it to the equivalent "$5,000,000" was wrongly flagged as both a dropped
+    fact ($5) and an added one ($5,000,000)."""
+    res = tailor.validate("managed a $5 mm budget", "managed a $5,000,000 budget")
+    assert res.ok, res.report()
+    res2 = tailor.validate("grew revenue 35 % last year", "grew revenue by 35% last year")
+    assert res2.ok, res2.report()
+
+
+def test_space_separated_unit_shorthand_still_detects_a_real_change():
+    # sanity: the space-tolerance fix must not make the lock LESS strict --
+    # an actually-changed amount is still caught.
+    res = tailor.validate("managed a $5 mm budget", "managed a $6,000,000 budget")
+    assert not res.ok
+    assert any("5,000,000" in e for e in res.errors)
 
 
 def test_changed_number_fails():
@@ -106,3 +143,32 @@ def test_dropped_large_number_renders_with_commas():
     res = tailor.validate("traced 1,234,567 transactions", "traced transactions")
     assert not res.ok
     assert "1,234,567" in " ".join(res.errors)
+
+
+def test_dropped_minus_sign_is_a_changed_fact():
+    """ISSUES G: 'grew headcount by -12' reworded to 'cut headcount by 12'
+    used to pass as unchanged -- the sign IS the fact."""
+    r = tailor.validate("Grew headcount by -12 during restructuring",
+                        "Cut headcount by 12 during restructuring")
+    assert not r.ok
+
+
+def test_negative_number_preserved_through_reword_passes():
+    r = tailor.validate("Delivered returns of -12% in Q1",
+                        "Q1 returns came to -12%")
+    assert r.ok
+
+
+def test_date_range_hyphen_is_not_a_negative_number():
+    facts = tailor.extract_facts("Analyst, 2019-2021, led coverage")
+    assert tailor.Fact("year", 2019.0) in facts
+    assert tailor.Fact("year", 2021.0) in facts
+    assert all(f.value > 0 for f in facts)
+
+
+def test_range_and_bullet_dashes_are_not_negative():
+    # "10-15%" is a range, "- 12%" is a list bullet -- neither is signed
+    facts = tailor.extract_facts("cut costs 10-15%\n- 12% budget reduction")
+    assert tailor.Fact("pct", 15.0) in facts
+    assert tailor.Fact("pct", 12.0) in facts
+    assert all(f.value > 0 for f in facts)

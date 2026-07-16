@@ -49,21 +49,25 @@ experience in the words this posting and its recruiter are searching for."
 
 Splits cleanly into a cheap half and a harder half:
 
-- **Half A — the match breakdown (matched / missing traits). Nearly free, already built.**
-  The scorer already computes matched skills, missing skills, matched keywords, and title
-  overlap, and already stores them in `score_reasons` (today they show on hover over the
-  match %). Turning that into a visible ✓matched / ✗missing list is a small display change
-  — no new AI, no resume editing. **Could be pulled forward to now/pre-launch** if we want.
-- **Half B — the rewrite suggestions. Post-launch; it's its own mini-product.** Needs: read
-  the user's real resume bullets (we have them in `profile.json`), find which ones already
-  cover a "missing" JD trait in different words, and suggest a truthful rephrase in the
-  posting's vocabulary. Reuses two things we already have — the **local Gemma box** (writes
-  the suggestion) and the **fact-validator** (`guardrail.py`, already guarantees no number/
-  date/$/metric changes). The genuinely new, high-stakes work is the **honesty guarantee on
-  generative text**: the model must only rephrase what's actually supported and never invent
-  experience — the same two-layer "receipt or it's flagged for a human" pattern from the
-  master plan's Decision 1. Always **suggest + user approves each edit**; never silently
-  rewrite. That keeps it inside the legal/quality firewall.
+- **Half A — the match breakdown (matched / missing traits). DONE (shipped, live).**
+  The scorer computes matched skills, missing skills, matched keywords, and title overlap,
+  stored in `score_reasons`; `dashboard.py` already renders it as a visible ✓matched /
+  &ndash;missing list under the match % (not hover-only — this doc just hadn't been updated
+  to say so). No further work here.
+- **Half B — the rewrite suggestions. Core engine shipped 2026-07-08; still post-launch
+  for the persistence/apply layer.** `jobagent/matchcoach.py` reads the user's real resume
+  bullets from `profile.json`, asks the local Gemma box for a truthful rephrase toward a
+  missing JD trait, and gates every suggestion through `jobagent/tailor.py`'s existing
+  fact-lock validator (`extract_facts`/`validate` — no number/date/$/metric may be added or
+  dropped, same guarantee it already gives tailored resume text); a rewrite that fails is
+  dropped outright, never shown. New capitalized terms (possible invented tools) are kept as
+  a caution, not a hard block — same severity split `tailor.py` already uses; the human
+  still reads it before using anything. Dashboard has a minimal `/coach/<job id>` page
+  (linked as "💡 suggest rewrites" next to a job's missing-skills list) that shows
+  suggestions for copy-paste — **nothing is auto-applied to `profile.json`.** Building an
+  actual approve/apply-and-persist flow (versioning, undo, where the edited bullet lives) is
+  a separate design decision, not done here — ask if that's wanted next. Tests:
+  `tests/test_matchcoach.py` (network-free, injected AI call, adversarial fabrication cases).
 
 ### Why post-launch (agreed direction)
 

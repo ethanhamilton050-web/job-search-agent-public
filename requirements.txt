@@ -16,5 +16,10 @@ Flask>=3.0
 #   pip install playwright && playwright install chromium
 # playwright>=1.44
 
+# Desktop packaging (HOST ONLY — see PACKAGING.md):
+#   pip install pywebview pyinstaller
+# pywebview>=6.2
+# pyinstaller>=6.21
+
 # Dev
 pytest>=8.0

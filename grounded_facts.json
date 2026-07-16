@@ -1,0 +1,20 @@
+{
+  "highest_education": "Bachelor's Degree",
+  "home_country": "United States of America",
+  "employers_all": [
+    "YMCA",
+    "Jersey Mike's",
+    "Example CPA Firm",
+    "Example Wealth Advisors"
+  ],
+  "employment_history_complete": true,
+  "insiders": [],
+  "government_officials": [],
+  "related_party_complete": true,
+  "finra_licenses": [
+    "Series 6",
+    "Series 63",
+    "SIE",
+    "Health and Life Insurance Producer"
+  ]
+}

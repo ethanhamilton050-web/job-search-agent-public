@@ -51,7 +51,7 @@ def answer_questions(questions, answers: dict, ai_answer_fn=None) -> list[dict]:
                             "source": field, "layer": "profile"})
         elif ai_answer_fn is not None:
             ai_answer, cited_field = ai_answer_fn(q)
-            checked = guardrail.verify_ai_answer(ai_answer, cited_field, answers)
+            checked = guardrail.verify_ai_answer(q, ai_answer, cited_field, answers)
             if checked == NEEDS_HUMAN:
                 results.append({"question": q, "answer": NEEDS_HUMAN,
                                 "source": "", "layer": "human"})

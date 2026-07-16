@@ -12,6 +12,7 @@ hand doesn't count — only firing the filler does. Reset it with
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 
 CAP = 3  # max automated attempts per company. Change here if you need to.
@@ -24,13 +25,47 @@ CREATE TABLE IF NOT EXISTS company_attempts (
 );
 """
 
+# Trailing legal-form words that make the SAME employer look like a different
+# company to an exact-match key ("Citi" vs "Citi, N.A." vs "Citi Inc." each got
+# an independent CAP budget -- ISSUES G, 2026-07-09 audit finding).
+_LEGAL_SUFFIXES = {"inc", "incorporated", "llc", "llp", "lp", "ltd", "limited",
+                   "plc", "corp", "corporation", "co", "company", "group",
+                   "holdings", "na", "sa", "ag", "nv"}
+
 
 def _key(company: str) -> str:
-    return " ".join((company or "").lower().split())
+    """Canonical per-company cap key: case/punctuation-blind, trailing legal
+    suffixes and a leading 'The' dropped -- so one employer written three ways
+    shares ONE cap budget.
+
+    # ponytail: token normalization only, no fuzzy matching -- 'Citigroup' vs
+    # 'Citi' stays two keys (over-merging different real companies would wrongly
+    # BLOCK applications, the worse failure). Upgrade path: a curated alias
+    # table if distinct brand spellings show up in real use."""
+    s = (company or "").lower().replace(".", "").replace("'", "")
+    words = re.findall(r"[a-z0-9&]+", s)
+    while len(words) > 1 and words[-1] in _LEGAL_SUFFIXES:
+        words.pop()
+    if len(words) > 1 and words[0] == "the":
+        words.pop(0)
+    return " ".join(words)
 
 
 def ensure_table(conn: sqlite3.Connection) -> None:
     conn.executescript(DDL)
+    # Re-key rows recorded under an older normalization (pre-suffix-stripping)
+    # so their counts keep protecting the same real company under the new key.
+    for company, cnt, last in conn.execute(
+            "SELECT company, count, last FROM company_attempts").fetchall():
+        k = _key(company)
+        if k and k != company:
+            conn.execute(
+                "INSERT INTO company_attempts (company, count, last) VALUES (?, ?, ?) "
+                "ON CONFLICT(company) DO UPDATE SET "
+                "count = count + excluded.count, "
+                "last = max(coalesce(company_attempts.last,''), coalesce(excluded.last,''))",
+                (k, cnt, last))
+            conn.execute("DELETE FROM company_attempts WHERE company=?", (company,))
     conn.commit()
 
 
@@ -64,6 +99,34 @@ def record(conn: sqlite3.Connection, company: str) -> int:
     )
     conn.commit()
     return count(conn, company)
+
+
+def try_record(conn: sqlite3.Connection, company: str, cap: int = CAP) -> bool:
+    """Atomically check-and-record one automation attempt against a company.
+    Returns True if it was allowed and recorded, False if the cap was already hit.
+
+    Found live, 2026-07-09, by an overnight adversarial audit: allowed()+record()
+    are two separate DB round-trips with no lock between them, so two concurrent
+    processes (a manual Apply click racing an unattended queue run, or two rapid
+    Apply clicks on different listings at the same company) can each read the
+    same stale count, both pass the check, and push the total past `cap`. This
+    does the check-and-increment as ONE conditional UPSERT, so only one
+    concurrent caller can ever win the last slot -- use this at any real call
+    site instead of the old allowed() + record() pair. allowed()/record() stay
+    as they were for display/reset/manual use, where the race doesn't apply.
+    """
+    key = _key(company)
+    if not key:
+        return True
+    ensure_table(conn)
+    cur = conn.execute(
+        "INSERT INTO company_attempts (company, count, last) VALUES (?, 1, datetime('now')) "
+        "ON CONFLICT(company) DO UPDATE SET count = count + 1, last = datetime('now') "
+        "WHERE company_attempts.count < ?",
+        (key, cap),
+    )
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def all_counts(conn: sqlite3.Connection) -> list[sqlite3.Row]:

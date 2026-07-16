@@ -41,7 +41,7 @@ import sys
 import tempfile
 import time
 
-from .. import config
+from .. import config, failpacket, guardrail, qbank, smartanswer
 from .answer_bank import build_answers
 
 PROFILE_DIR = config.ROOT / ".browser-profile"  # persistent login per host (git-ignored)
@@ -168,9 +168,11 @@ def _shot(page, label: str) -> None:
     """Save a full-page screenshot so Claude can SEE the actual rendered page (read the
     PNG directly) instead of inferring everything from automation-ids."""
     try:
-        TRACE_DIR.mkdir(parents=True, exist_ok=True)
-        path = TRACE_DIR / f"{label}.png"
+        base = failpacket.attempt_dir() or TRACE_DIR  # per-attempt folder if one is open
+        base.mkdir(parents=True, exist_ok=True)
+        path = base / f"{label}.png"
         page.screenshot(path=str(path), full_page=True)
+        failpacket.note_shot(label)  # so a question parked next points at this picture
         _dbg(f"screenshot -> output/traces/{path.name}")
     except Exception as exc:  # noqa: BLE001
         _dbg(f"screenshot failed: {exc}")
@@ -1313,15 +1315,21 @@ def _degree_aliases(value: str):
     substring matcher lands on whichever the tenant offers. The plural level word
     ('bachelors') matches PNC's 'Bachelors' but NOT a spelled-out 'Bachelor of Arts/Science'
     split (those are singular) — so we never pick the wrong BA-vs-BS subtype. The level is
-    always accurate: a B.S. IS a bachelor's. ponytail: add MBA/JD forms if someone has one."""
+    always accurate: a B.S. IS a bachelor's. MBA and JD come FIRST: an MBA routed to the
+    M.S. forms clicked "Master of Science" (a degree not held — the honesty-contract class),
+    and 'Juris Doctor' contains 'doctor' so it fell through to the Ph.D. forms."""
     v = (value or "").lower()
+    if "mba" in v or "m.b.a" in v or "business administration" in v:
+        return ["MBA", "M.B.A.", "Master of Business Administration", "masters"]
+    if "juris" in v or "j.d" in v or v.strip() == "jd":
+        return ["J.D.", "JD", "Juris Doctor"]
     if "bachelor" in v and "art" in v:
         return ["B.A.", "Bachelor of Arts", "bachelors"]
     if "bachelor" in v or "b.s" in v or "bsc" in v:
         return ["B.S.", "BSc", "B.Sc", "Bachelor of Science", "bachelors"]
     if "master" in v and "art" in v:
         return ["M.A.", "Master of Arts", "masters"]
-    if "master" in v or "m.s" in v or "msc" in v or "mba" in v:
+    if "master" in v or "m.s" in v or "msc" in v:
         return ["M.S.", "MSc", "M.Sc", "Master of Science", "masters"]
     if "associate" in v:
         return ["Associate", "associates"]
@@ -1895,17 +1903,44 @@ def _selfid_value(pref: str, kind: str) -> str:
     }.get(kind, "decline")
 
 
-def _compliance_answer(qtext: str) -> str:
-    """Map a Citi Application-Question to Ethan's truthful Yes/No.
+def _clean_question(qtext: str) -> str:
+    """The QUESTION alone, with Workday's own widget/validation noise stripped.
 
-    Yes: legally authorized to work / can submit work-authorization (I-9) verification /
-    at least 18. No: everything else Citi asks (relatives at Citi, KPMG, SGO/SCP,
-    sponsorship, armed-forces service). Kept pure so the mapping that actually matters —
-    getting a compliance answer wrong is costly — can be unit-tested without a browser."""
-    low = (qtext or "").lower()
-    yes_if = ("authorized to work", "legally authorized", "authorization to work",
-              "eligible to work", "at least 18", "18 years of age", "18 years or older")
-    return "Yes" if any(k in low for k in yes_if) else "No"
+    A formField container's inner_text mixes in the button placeholder ("Select One")
+    and, after a failed advance, an injected "Error: The field ... is required". Left in,
+    they pollute a parked question and stop it re-matching a remembered answer next run.
+    # ponytail: cut at the first known noise marker — enough for the fields Workday
+    # actually renders; widen the split if the debug log shows a new marker."""
+    q = " ".join((qtext or "").split())
+    q = re.split(r"\bSelect One\b|\bError[:-]", q)[0]
+    return q.strip().rstrip("*").strip()
+
+
+def _questionnaire_answer(qtext: str, ans: dict) -> str:
+    """A TRUTHFUL Yes/No for one screening question, or "" meaning 'we can't prove it —
+    leave it for the human'. Priority:
+      1. the human's own remembered answer (screening_answers.json, via qbank), then
+      2. a fact the honesty guardrail can PROVE from the answer bank (work auth, 18+,
+         sponsorship, veteran), else
+      3. "" — unknown; the caller parks it for the /answers page. We NEVER guess 'No'.
+
+    Replaces the old _compliance_answer, which blind-defaulted every unrecognized
+    question to 'No' and so stated falsehoods (e.g. 'No, I don't hold a FINRA license')
+    with zero human review — the exact honesty gap guardrail.py exists to close."""
+    q = _clean_question(qtext)
+    # Job-SPECIFIC computed answers first (salary strategy -> number, residence Yes/No
+    # from location). Must precede the qbank lookup so a stored strategy word like
+    # "average" becomes the computed number, not a literal typed into the box.
+    smart = smartanswer.resolve(q, ans)
+    if smart:
+        return smart
+    if smartanswer.needs_computed_salary(q):
+        return ""  # salary strategy set but no number computable -> PARK; never fill "average"
+    remembered = qbank.answer(q)
+    if remembered:
+        return remembered
+    grounded = guardrail.resolve(q, ans)
+    return "" if grounded == guardrail.NEEDS_HUMAN else grounded
 
 
 def _open_and_pick(root, ctrl, value: str) -> bool:
@@ -1966,7 +2001,17 @@ def _fill_questionnaire(root, ans: dict) -> int:
             qtext = " ".join((cont.inner_text() or "").split())
         except Exception:  # noqa: BLE001
             qtext = ""
-        val = _compliance_answer(qtext)
+        val = _questionnaire_answer(qtext, ans)
+        if not val:
+            # Unknown/unprovable -> park it for the human on the /answers page and leave
+            # the field blank; never fabricate a 'No'. Workday's own 'required field
+            # blank' then stalls the page for the human to finish. Once answered once on
+            # /answers, qbank remembers it and this fills it automatically next run.
+            clean = _clean_question(qtext)
+            qbank.record_unknown(clean)
+            failpacket.note_question(clean)  # tag it with the current screenshot for review
+            _dbg(f"questionnaire PARK (needs human) <- {clean[:80]!r}")
+            continue
         if _open_and_pick(root, btn, val):
             _dbg(f"questionnaire: {val} <- {qtext[:80]!r}")
             answered += 1
@@ -1975,8 +2020,166 @@ def _fill_questionnaire(root, ans: dict) -> int:
     return answered
 
 
+def _fill_questionnaire_text(root, ans: dict) -> int:
+    """Free-text questionnaire questions — the sibling of _fill_questionnaire's Yes/No
+    dropdowns. Workday renders some REQUIRED questions ('Please provide reasons for
+    leaving previous employers', 'salary expectations for this position') as free-text
+    TEXTAREAS, which _fill_questionnaire's button-only loop never touched — so they were
+    neither filled nor parked: invisible to the human on /answers AND a silent
+    required-field stall that stopped the page from ever reaching Review (found live on
+    the PNC Financial Advisor form, 2026-07-13). Same honesty contract: fill ONLY from
+    the human's remembered answer (qbank); otherwise PARK to /answers and leave blank —
+    never fabricate free text. Returns how many textareas we filled."""
+    tas = root.locator('textarea[id*="uestionnaire--"]')
+    try:
+        n = min(tas.count(), 40)
+    except Exception:  # noqa: BLE001
+        n = 0
+    filled = 0
+    for i in range(n):
+        ta = tas.nth(i)
+        try:
+            if not ta.is_visible():
+                continue
+            if (ta.input_value() or "").strip():
+                filled += 1  # already has text (e.g. on a re-run) — never overwrite it
+                continue
+        except Exception:  # noqa: BLE001
+            continue
+        try:
+            cont = ta.locator(
+                'xpath=ancestor::*[starts-with(@data-automation-id,"formField-")][1]')
+            qtext = " ".join((cont.inner_text() or "").split())
+        except Exception:  # noqa: BLE001
+            qtext = ""
+        clean = _clean_question(qtext)
+        val = _questionnaire_answer(qtext, ans)  # qbank -> guardrail(->"" for free text)
+        if not val:
+            qbank.record_unknown(clean)
+            failpacket.note_question(clean)  # tag it with the current screenshot for review
+            _dbg(f"questionnaire(text) PARK (needs human) <- {clean[:80]!r}")
+            continue
+        try:
+            ta.fill(str(val))
+            _dbg(f"questionnaire(text): filled <- {clean[:80]!r}")
+            filled += 1
+        except Exception:  # noqa: BLE001
+            _dbg(f"questionnaire(text) MISS <- {clean[:80]!r}")
+    return filled
+
+
+def _strip_options_tail(q: str) -> str:
+    """Drop the trailing run of radio OPTION labels ('Yes No', '... Prefer not to say')
+    that a formField container's inner_text glues onto the question, so what we park
+    (and later re-match) is the QUESTION alone — same job _clean_question does for the
+    button-dropdown path's 'Select One' noise."""
+    q = re.sub(r"(?:\s+(?:yes|no|prefer not to (?:say|answer|disclose)|decline to answer"
+               r"|i don'?t wish to answer))+\s*$", "", q, flags=re.I)
+    return q.strip().rstrip("*").strip()  # 'Question* Yes No' -> 'Question'
+
+
+def _pick_radio_in_group(root, phrase: str, val: str) -> bool:
+    """Click the `val` radio INSIDE the one formField container whose question text
+    contains every word of `phrase` — never a page-global click."""
+    words = [w for w in phrase.lower().split() if w]
+    if not words or not val:
+        return False
+    conts = root.locator('[data-automation-id^="formField-"]')
+    try:
+        n = min(conts.count(), 40)
+    except Exception:  # noqa: BLE001
+        n = 0
+    pat = re.compile(rf"^\s*{re.escape(val)}\s*$", re.I)
+    for i in range(n):
+        cont = conts.nth(i)
+        try:
+            if not cont.is_visible():
+                continue
+            text = " ".join((cont.inner_text() or "").split()).lower()
+            if not all(w in text for w in words):
+                continue
+            opt = cont.get_by_role("radio", name=pat).first
+            if opt.count():
+                opt.click(timeout=1500)
+                _log(f"radio [{phrase}] -> {val!r}")
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
+
+
+def _fill_radio_screening(root, ans: dict) -> tuple[int, int]:
+    """Radio-button screening questions — the OTHER Workday screening layout (some
+    tenants render Yes/No screening as radio groups instead of the questionnaire's
+    button dropdowns). Same honesty contract as _fill_questionnaire: the human's
+    remembered answer (qbank), else a guardrail-PROVEN fact, else park the question
+    on the /answers page and leave it blank. NEVER guesses.
+
+    Each answer is clicked INSIDE its own question's formField container, so a 'No'
+    can never land on a neighboring question (the old page-global exact-'No' click
+    could hit ANY radio group on the page — same fabrication class as the old
+    questionnaire blind-'No').
+
+    Returns (radio_groups_seen, answered). NOT yet live-proven on a radio-layout
+    tenant (PNC/Citi both use the questionnaire path); logic is unit-tested."""
+    conts = root.locator('[data-automation-id^="formField-"]')
+    try:
+        n = min(conts.count(), 40)
+    except Exception:  # noqa: BLE001
+        n = 0
+    seen = answered = 0
+    for i in range(n):
+        cont = conts.nth(i)
+        try:
+            if not cont.is_visible():
+                continue
+            radios = cont.locator('input[type="radio"]')
+            if radios.count() < 2:  # a real choice has >= 2 options
+                continue
+            seen += 1
+            if cont.locator('input[type="radio"]:checked').count():
+                answered += 1  # already selected (a re-run, or Workday pre-fill)
+                continue
+            qtext = " ".join((cont.inner_text() or "").split())
+        except Exception:  # noqa: BLE001
+            continue
+        q = _strip_options_tail(_clean_question(qtext))
+        val = _questionnaire_answer(q, ans)
+        if not val:
+            # Unknown/unprovable -> park for the human on /answers, leave blank.
+            qbank.record_unknown(q)
+            failpacket.note_question(q)  # tag it with the current screenshot for review
+            _dbg(f"screening PARK (needs human) <- {q[:80]!r}")
+            continue
+        pat = re.compile(rf"^\s*{re.escape(val)}\s*$", re.I)
+        clicked = False
+        try:
+            opt = cont.get_by_role("radio", name=pat).first
+            if opt.count():
+                opt.click(timeout=1500)
+                clicked = True
+        except Exception:  # noqa: BLE001
+            pass
+        if not clicked:
+            try:  # label text inside THIS container only
+                loc = cont.get_by_text(pat).first
+                if loc.count():
+                    loc.click(timeout=1500)
+                    clicked = True
+            except Exception:  # noqa: BLE001
+                pass
+        if clicked:
+            answered += 1
+            _dbg(f"screening radio: {val} <- {q[:80]!r}")
+        else:
+            # We HAVE an answer but no matching option (e.g. a remembered free-text
+            # answer on a Yes/No group) — leave it for the human, it's already in qbank.
+            _dbg(f"screening radio MISS ({val}) <- {q[:80]!r}")
+    return seen, answered
+
+
 def _fill_screening(page, ans: dict) -> int:
-    """Best-effort: match each visible question's label to your screening_answers.
+    """Best-effort: answer each visible screening question honestly, park the rest.
 
     Returns the count of questions we believe we left UNANSWERED so the caller can
     warn you to scroll back. Screening varies wildly per employer; this is the one
@@ -1996,12 +2199,17 @@ def _fill_screening(page, ans: dict) -> int:
     except Exception:  # noqa: BLE001
         pass
     screen = {k.lower(): v for k, v in (ans.get("screening_answers") or {}).items()}
-    # Common, near-universal ones via stable-ish phrasing.
-    if ans.get("work_authorized"):
-        _pick_radio_by_text(page, "authorized to work") or _select(page, "workAuthorization", "Yes")
-    if ans.get("needs_sponsorship") is False:
-        # "Do you require sponsorship?" -> No. exact: don't match 'November'/'Notes'.
-        _pick_radio_by_text(page, "No", exact=True)
+    # Radio-group questions, each answered/parked inside its own container.
+    seen, radio_answered = _fill_radio_screening(page, ans)
+    if seen == 0:
+        # Legacy fallback for a layout the container walk didn't recognize — the old
+        # near-universal picks. Only reached when NO radio groups were enumerable, so
+        # the page-global exact-'No' click can't stomp an enumerated question.
+        if ans.get("work_authorized"):
+            _pick_radio_by_text(page, "authorized to work") or _select(page, "workAuthorization", "Yes")
+        if ans.get("needs_sponsorship") is False:
+            # "Do you require sponsorship?" -> No. exact: don't match 'November'/'Notes'.
+            _pick_radio_by_text(page, "No", exact=True)
     # Desired salary — Workday wants a bare number (strip $/commas/text).
     salary = ans.get("salary_expectation")
     if salary not in (None, ""):
@@ -2010,10 +2218,15 @@ def _fill_screening(page, ans: dict) -> int:
          or _fill_label(page, "desired", sal) or _fill(page, "salary", sal))
     answered = 0
     for key, val in screen.items():
-        # try a label-driven text fill, then an exact radio/option match
-        if _fill_label(page, key, val) or _pick_radio_by_text(page, str(val), exact=True):
+        # try a label-driven text fill, then a radio click scoped to the ONE question
+        # whose text matches the key. (The old fallback clicked the first exact-value
+        # radio ANYWHERE on the page — 'willing_to_relocate: Yes' could click 'Yes'
+        # on a totally different question. Same fabrication class as the global 'No'.)
+        label = key.replace("_", " ")
+        if _fill_label(page, label, val) or _pick_radio_in_group(page, label, str(val)):
             answered += 1
-    return len(screen) - answered  # configured answers we could NOT place
+    # configured answers we could NOT place + radio questions left for the human
+    return (len(screen) - answered) + (seen - radio_answered)
 
 
 # --------------------------------------------------------------------------- #
@@ -2146,19 +2359,23 @@ def _stop_trace(ctx, label: str) -> None:
 
 
 def _dump_failure(ctx, label: str) -> None:
-    """On a hard crash, save what the front page looked like (PNG + HTML)."""
-    if not _trace_on():
+    """On a hard crash, save what the front page looked like (PNG + HTML).
+    Always fires when a failpacket is open (the unattended queue path) so a crash
+    never leaves an empty folder; otherwise stays gated behind JOBAGENT_TRACE."""
+    base = failpacket.attempt_dir()
+    if base is None and not _trace_on():
         return
+    base = base or TRACE_DIR
     try:
         pages = [pg for pg in ctx.pages if not pg.is_closed()]
         if not pages:
             return
         page = pages[-1]
-        TRACE_DIR.mkdir(parents=True, exist_ok=True)
+        base.mkdir(parents=True, exist_ok=True)
         stamp = f"{label}-{time.strftime('%Y%m%d-%H%M%S')}-fail"
-        page.screenshot(path=str(TRACE_DIR / f"{stamp}.png"), full_page=True)
-        (TRACE_DIR / f"{stamp}.html").write_text(page.content(), encoding="utf-8")
-        print(f"    [trace] failure snapshot -> output/traces/{stamp}.png")
+        page.screenshot(path=str(base / f"{stamp}.png"), full_page=True)
+        (base / f"{stamp}.html").write_text(page.content(), encoding="utf-8")
+        print(f"    [trace] failure snapshot -> {base / (stamp + '.png')}")
     except Exception:  # noqa: BLE001
         pass
 
@@ -2223,7 +2440,7 @@ def launch_browser(p, headless: bool):
 
 
 def fill_application(url: str, wait_for_close: bool = False, auto_close: bool = False,
-                     listing_id: str | None = None) -> None:
+                     listing_id: str | None = None, job: dict | None = None) -> None:
     """Open `url`, drive the whole wizard, stop on Review for you to submit.
 
     auto_close: for the autonomous debug loop — after the fill loop, dump the final
@@ -2243,12 +2460,15 @@ def fill_application(url: str, wait_for_close: bool = False, auto_close: bool = 
         )
 
     ans = build_answers()
+    if job:
+        ans["_job"] = job  # job-specific context for smartanswer (salary range, location)
 
     with sync_playwright() as p:
         ctx = launch_browser(p, headless=False)
         try:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             print(f"Opening {url}")
+            failpacket.start(listing_id, url, DEBUG_LOG)  # open this attempt's evidence folder
             _dbg(f"=== apply start: {url}")
             page.goto(url, wait_until="domcontentloaded")
             _sleep(2)
@@ -2301,6 +2521,7 @@ def fill_application(url: str, wait_for_close: bool = False, auto_close: bool = 
                 _fill_my_information(root, ans)
                 _fill_experience(root, ans)
                 _fill_questionnaire(root, ans)
+                _fill_questionnaire_text(root, ans)  # free-text Qs: fill-or-park, never skip
                 _fill_screening(root, ans)
                 _fill_self_id(root, ans)
                 _shot(page, f"page-{step+1}-after")  # what we actually did to it
@@ -2356,6 +2577,8 @@ def fill_application(url: str, wait_for_close: bool = False, auto_close: bool = 
                 else:
                     _dbg("no validation errors detected on final page")
                     print("\nNo validation errors detected on the final page.")
+                failpacket.finish("needs_human" if errs else "filled",
+                                  errors=errs, step="reached Review")
                 # Best-effort fill report for the dashboard. Observation only: the
                 # whole block is swallowed so logging can never change the run or
                 # raise. Local imports keep this off the module import path.
@@ -2381,10 +2604,12 @@ def fill_application(url: str, wait_for_close: bool = False, auto_close: bool = 
                     pass
             else:
                 input("\nPress Enter here to close the browser when you're done... ")
-        except Exception:  # noqa: BLE001 - capture what Workday looked like when it broke
+        except Exception as exc:  # noqa: BLE001 - capture what Workday looked like when it broke
             _dump_failure(ctx, "workday")
+            failpacket.finish("error", errors=[f"crashed: {exc}"], step="exception")
             raise
         finally:
+            failpacket.finish("done")  # no-op if already finished; catches attended paths
             _stop_trace(ctx, "workday")
             try:
                 ctx.close()

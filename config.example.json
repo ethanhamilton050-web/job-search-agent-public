@@ -3,8 +3,11 @@
 
   "targets": {
     "titles": ["Financial Analyst", "Data Analyst", "Business Analyst"],
+    "_locations_note": "Your target cities/regions, matched as case-insensitive substrings of a job's location (a state token like ', ny' matches any NY city). Leave [] to not filter by location.",
     "locations": ["Remote", "New York, NY"],
     "remote_ok": true,
+    "_exclude_title_terms_note": "Hide any job whose title contains one of these (substring, case-insensitive; pad with spaces to scope a bare word). Leave [] to hide nothing. Example: [\"senior\", \"director\", \"engineer\"].",
+    "exclude_title_terms": [],
     "_note": "work_authorization + salary_floor are advisory: they add a heads-up reason on a match, they do not change the score.",
     "work_authorization": "US citizen / no sponsorship needed",
     "salary_floor": 60000,

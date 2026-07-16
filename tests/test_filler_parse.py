@@ -5,6 +5,7 @@ only thing worth a unit test here is the fragile text->fields parsing.
 """
 import os
 
+from jobagent import qbank
 from jobagent.workday import filler
 
 
@@ -95,22 +96,72 @@ def test_collect_errors_dedups_and_skips_hidden():
     assert errs == ["Error: Required", "Bad phone"]
 
 
-def test_compliance_answer_maps_citi_questions():
-    yes_qs = [
-        "Are you legally authorized to work in the country where the position is located?",
-        "Can you, within the time period prescribed by law, submit verification of both "
-        "your identity and authorization to work in the United States?",
-        "Are you at least 18 years of age?",
-    ]
-    for q in yes_qs:
-        assert filler._compliance_answer(q) == "Yes", q
-    no_qs = [
-        "Will you require sponsorship for employment?",
-        "Have you ever been employed by KPMG?",
-        "Are you a referral or relative of a current Senior Government Official?",
-        "Are you a referral of a current Senior Commercial Person?",
-        "Have you ever served in the Armed Forces of the United States?",
-        "",
-    ]
-    for q in no_qs:
-        assert filler._compliance_answer(q) == "No", q
+def test_questionnaire_answer_grounds_universal_facts_and_parks_the_rest(tmp_path, monkeypatch):
+    """The honesty fix (replaces the old _compliance_answer): _questionnaire_answer only
+    returns a Yes/No it can PROVE — the human's own remembered answer, or a
+    guardrail-grounded universal fact — and returns "" ('leave it for the human') for
+    everything else, instead of blind-defaulting the unknown to 'No' and stating
+    falsehoods like 'No, I don't hold a FINRA license' with zero human review."""
+    monkeypatch.setattr(qbank, "STORE", tmp_path / "s.json")
+    facts = {"work_authorized": True, "needs_sponsorship": False,
+             "is_over_18": True, "is_veteran": False}
+
+    # Provable from the answer bank via the guardrail -> answered truthfully.
+    assert filler._questionnaire_answer(
+        "Are you legally authorized to work in the United States?", facts) == "Yes"
+    assert filler._questionnaire_answer("Are you at least 18 years of age?", facts) == "Yes"
+    assert filler._questionnaire_answer(
+        "Will you require sponsorship for employment?", facts) == "No"
+    assert filler._questionnaire_answer(
+        "Have you ever served in the Armed Forces of the United States?", facts) == "No"
+
+    # Unprovable / employer-specific -> "" (parked for the human), NOT a fabricated 'No'.
+    for q in ["Do you currently hold an active FINRA securities license?",
+              "Have you ever been employed by KPMG?",
+              "Have you ever been terminated or asked to resign?",
+              ""]:
+        assert filler._questionnaire_answer(q, facts) == "", q
+
+    # Live PNC noise (button placeholder + injected validation error) is stripped first.
+    noisy = "Are you 18 years of age or older?* Select One Error: The field is required"
+    assert filler._questionnaire_answer(noisy, facts) == "Yes"
+
+    # The human's own remembered answer (qbank) wins over everything.
+    qbank.save({"Have you ever been employed by KPMG?": "No"})
+    assert filler._questionnaire_answer("have you ever been employed by kpmg", facts) == "No"
+
+    # A 'universal' question whose backing field is missing still routes to the human.
+    assert filler._questionnaire_answer(
+        "Have you ever served in the Armed Forces?", {"work_authorized": True}) == ""
+
+
+def test_selfid_value_defaults_to_declining_language_per_field():
+    """The self-ID / EEO mapper drives the most sensitive fields on any application;
+    a quiet regression here would mis-answer race/gender/veteran. (Audit U11.)"""
+    # No preference (or an explicit "decline") -> each field's real decline phrasing.
+    assert filler._selfid_value("decline", "gender") == "I do not wish to answer"
+    assert filler._selfid_value("", "race") == "I do not wish to self-identify"
+    assert filler._selfid_value(None, "veteran") == "I am not a veteran"
+    # An explicit real preference is passed through untouched.
+    assert filler._selfid_value("Female", "gender") == "Female"
+    # An unknown field kind falls back to the literal "decline" (never guesses a value).
+    assert filler._selfid_value("decline", "unknown") == "decline"
+
+
+def test_degree_aliases_mba_never_matches_master_of_science():
+    """Honesty-contract adversarial case (near-miss): an MBA must offer MBA forms,
+    and NO want may substring-match a tenant's 'Master of Science' option —
+    that click asserts a degree Ethan doesn't hold (the license/education class)."""
+    wants = filler._degree_aliases("MBA")
+    assert "MBA" in wants and "Master of Business Administration" in wants
+    assert not [w for w in wants if w.lower() in "master of science"], wants
+
+
+def test_degree_aliases_jd_never_matches_phd():
+    """'Juris Doctor' contains 'doctor' — it must NOT fall through to the Ph.D.
+    branch and click 'Ph.D.'/'Doctorate' (a credential class the holder lacks)."""
+    for spelled in ("J.D.", "JD", "Juris Doctor (J.D.)"):
+        wants = filler._degree_aliases(spelled)
+        assert "Juris Doctor" in wants, (spelled, wants)
+        assert "Ph.D." not in wants and "Doctorate" not in wants, (spelled, wants)
+        assert not [w for w in wants if w.lower() in "doctor of philosophy"], wants

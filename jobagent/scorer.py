@@ -32,45 +32,52 @@ _FOREIGN = (
     "singapore", "netherlands", "amsterdam", "spain", "madrid", "barcelona", "poland",
     "brazil", "mexico", "philippines", "japan", "tokyo", "emea", "apac", "latam",
 )
-# Acceptable on-site metros: Chester/North NJ, NYC, Philadelphia, Pittsburgh.
-_METRO = (
-    "new jersey", ", nj", "chester", "morristown", "parsippany", "princeton",
-    "newark", "jersey city", "hoboken", "edison", "paramus", "saddle brook", "fairfield",
-    "new york", ", ny", "nyc", "manhattan", "brooklyn",
-    "philadelphia", "philly", "pittsburgh", ", pa",
-)
 
 
 def location_ok(location: str, remote: bool, targets: dict) -> bool:
-    """On-site jobs in the target metros only (Chester/NJ, NYC, Philadelphia,
-    Pittsburgh). Remote and foreign jobs are excluded. The dashboard 'show all'
-    toggle / `list --all` bypasses this."""
+    """True if a job's location fits the configured search.
+
+    The metro allowlist comes from `targets["locations"]` (case-insensitive
+    substring match, so "New York, NY" matches "New York, NY, US" and a token
+    like ", nj" matches any NJ city). Remote jobs count only when
+    `targets["remote_ok"]` is on. With NO locations configured, location isn't
+    filtered at all (any US location shows) so a customer who hasn't set metros
+    isn't handed a blank screen. Foreign locations are always excluded (US-focused
+    product). The dashboard 'show all' toggle / `list --all` bypasses this.
+
+    (Un-hardwired for F1: the NJ/NY/PA metro list used to be baked in here; it now
+    lives in each user's config so any customer's cities work.)
+    """
     loc = (location or "").lower()
     if remote or "remote" in loc or "anywhere" in loc:
-        return False
+        return bool(targets.get("remote_ok", False))
     if not loc or any(f in loc for f in _FOREIGN):
         return False
-    metros = set(_METRO)
-    metros.update(t.lower().strip() for t in targets.get("locations", [])
-                  if t.strip().lower() not in ("", "remote"))
+    metros = [t.lower().strip() for t in targets.get("locations", [])
+              if t.strip().lower() not in ("", "remote")]
+    if not metros:
+        return True  # no location targets configured -> don't filter by location
     return any(m in loc for m in metros)
 
 
-# Titles an early-career finance/accounting candidate isn't a fit for.
-_SENIOR = ("senior", "sr.", " sr ", " sr,", "staff ", "principal", " lead ", " lead,",
-           "lead ", "director", "vp ", "vp,", "vice president", "head of", "chief", "manager", " mgr")
-_WRONG_DOMAIN = ("engineer", "developer", "devops", "site reliability", " sre",
-                 "security analyst", "information security", "cybersecurity", "network",
-                 "machine learning", " ml ", "full stack", "full-stack", "frontend",
-                 "front-end", "backend", "back-end", "ios ", "android", "embedded",
-                 "firmware", "account executive", "sales representative")
+def qualified(title: str, targets: dict | None = None) -> bool:
+    """True unless the title contains a configured exclusion term.
 
+    Terms come from `targets["exclude_title_terms"]` (case-insensitive substring
+    against the title padded with spaces, so callers can scope a bare word with
+    its own spaces, e.g. " ml " won't match "html"). No terms configured -> nothing
+    excluded.
 
-def qualified(title: str) -> bool:
-    """Hide roles an early-career finance/accounting candidate isn't a fit for:
-    senior+ levels and pure software/IT/security engineering."""
+    (Un-hardwired for F1: the senior-level + software/IT exclusions used to be
+    baked in, hiding those roles for every user; they now live in config so a
+    senior candidate, an engineer, or a career-changer can set their own or clear
+    them.)
+    """
+    excl = (targets or {}).get("exclude_title_terms")
+    if not excl:
+        return True
     t = f" {(title or '').lower()} "
-    return not (any(s in t for s in _SENIOR) or any(d in t for d in _WRONG_DOMAIN))
+    return not any(term.lower() in t for term in excl)
 
 
 def _salary_floor_flag(listing: Listing, targets: dict) -> str | None:
@@ -174,10 +181,8 @@ def score_listing(listing: Listing, profile: ResumeProfile, cfg: dict) -> tuple[
 
     if not targets.get("remote_ok", True) and listing.remote:
         reasons.append("note: remote role")
-    locs = [loc.lower() for loc in targets.get("locations", [])]
-    if locs and listing.location and not listing.remote:
-        if not any(loc in listing.location.lower() for loc in locs):
-            reasons.append(f"location mismatch: {listing.location}")
+    if listing.location and not listing.remote and not location_ok(listing.location, listing.remote, targets):
+        reasons.append(f"location mismatch: {listing.location}")
 
     salary_note = _salary_floor_flag(listing, targets)
     if salary_note:

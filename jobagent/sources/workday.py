@@ -45,29 +45,45 @@ def fetch(site_url: str, targets: dict | None = None, cap: int = 300) -> list:
         try:
             r = session.post(api, json={"appliedFacets": {}, "limit": 20, "offset": offset,
                                         "searchText": ""}, timeout=20)
+            if not r.ok:
+                # A rate-limit/bot-challenge response used to look identical to a
+                # genuinely empty board (both fall through to "no more jobs") --
+                # found live, 2026-07-09, by an overnight adversarial audit.
+                print(f"  [workday:{tenant}] fetch failed: HTTP {r.status_code}")
+                break
             posts = (r.json() if "json" in r.headers.get("content-type", "") else {}).get("jobPostings") or []
         except Exception as exc:  # noqa: BLE001 - a bad board shouldn't crash the scan
             print(f"  [workday:{tenant}] fetch failed: {exc}")
             break
         if not posts:
             break
-        keep += [j for j in posts
-                 if location_ok(j.get("locationsText", ""), False, targets) and qualified(j.get("title", ""))]
+        # isinstance guard: a null placeholder entry in jobPostings (a real,
+        # observed Workday pattern for a partial/failed-to-serialize posting)
+        # used to crash the whole scan on j.get(...) -- found live, 2026-07-09.
+        keep += [j for j in posts if isinstance(j, dict)
+                 and location_ok(j.get("locationsText", ""), False, targets)
+                 and qualified(j.get("title", ""), targets)]
 
     # 2) full description for the survivors (for scoring + the dashboard).
     # ponytail: 8 parallel detail fetches over the shared session. These were
     # serial before (one 20s-timeout request per survivor) — the scan's slowest
     # step by far. Bump max_workers if a board has hundreds of survivors.
     def _detail(j):
+        # .get(key, "") only substitutes the default when the key is ABSENT, not
+        # when it's present-but-null -- a listing with "externalPath": null (a
+        # plausible draft/removed-posting shape) used to raise TypeError building
+        # the URL below, uncaught (outside the try/except), crashing fetch() from
+        # inside ThreadPoolExecutor.map. Found live, 2026-07-09.
+        external_path = j.get("externalPath") or ""
         desc = j.get("title", "")
         try:
-            d = session.get(cxs + j.get("externalPath", ""), timeout=10).json()
+            d = session.get(cxs + external_path, timeout=10).json()
             desc = strip_html(d.get("jobPostingInfo", {}).get("jobDescription", "")) or desc
         except Exception:  # noqa: BLE001
             pass
         return make_listing(
             title=j.get("title", ""), company=tenant, location=j.get("locationsText", ""),
-            url=root + "/" + site + j.get("externalPath", ""),
+            url=root + "/" + site + external_path,
             source=f"workday:{tenant}", posted_date=j.get("postedOn", ""), description=desc,
         )
 

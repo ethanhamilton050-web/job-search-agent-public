@@ -135,6 +135,16 @@ def match_breakdown(reasons: str) -> dict:
     return {"matched": matched, "missing": missing, "notes": notes}
 
 
+def ollama_reachable(base: str = "http://localhost:11434", timeout: float = 1.5) -> bool:
+    """Quick, cheap check so a caller summarizing many listings can bail out with
+    ONE message instead of attempting (and failing) a full request per listing."""
+    try:
+        urllib.request.urlopen(base.rstrip("/") + "/api/tags", timeout=timeout)
+        return True
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+        return False
+
+
 def ai_summary(description: str, title: str = "", company: str = "", *,
                model: str = "gemma4:e4b", base: str = "http://localhost:11434",
                timeout: int = 60) -> str | None:

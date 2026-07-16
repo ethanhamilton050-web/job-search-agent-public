@@ -99,6 +99,21 @@ All tests used the real Citi Workday application, driven by `experiments/field_m
 
 **Conclusion: Decision 1's feasibility is fully retired.** Form-understanding + hard-question reasoning + the honesty guarantee all work on a small, free, local model. The one open confidence-builder is breadth (only Citi tested so far).
 
+**Caveat added 2026-07-09:** the 9/9 honesty-safety-net result above tested a
+*curated* question set, not an *adversarial* one. An overnight adversarial
+audit specifically hunting for topically-similar-but-wrong-topic questions
+found real gaps in `jobagent/guardrail.py`'s Layer 1 (a felony/weapons
+question was auto-answering via `is_veteran`; a background-check-consent
+question via `work_authorized` — zero human review, since Layer 1 has no
+receipt check) and Layer 2 (a receipt's field value was checked, but never
+whether the field was actually relevant to the question). Both are now
+fixed and re-verified — see `ISSUES.md`'s fixed log, 2026-07-09. The honesty
+guarantee's *mechanism* (demand a receipt, never trust the model) was always
+sound; its *pattern coverage* had real, demonstrated holes that only surfaced
+under adversarial testing, not the original curated validation. Worth
+remembering before treating any future "N/N passed" result as the full story
+— test what should fail, not just what should pass.
+
 ## Open / next steps
 
 **Built 2026-07-02 (overnight, code-side, all unit-tested):**
@@ -113,7 +128,33 @@ All tests used the real Citi Workday application, driven by `experiments/field_m
 - ✅ Descriptor scrub — `fieldmap.scrub()` strips volatile ids so the map cache keys on stable page structure; `tests/test_scrub.py`.
 - ✅ Fill report + Review detail — `jobagent/fillreport.py` stores what each run filled/flagged/errored (`tests/test_fillreport.py`); the queue filler writes it best-effort (observation only, can't affect a run) and the dashboard `/queue` shows "N flagged, M errors" per job (`tests/test_dashboard_queue_report.py`).
 
+**Built 2026-07-08 (on the actual Windows host, not a container):**
+- ✅ Desktop app freeze, fully offline — `pyinstaller --windowed --collect-all playwright
+  --add-data "...ms-playwright;ms-playwright" app.py` produces a working `JobSearchAgent.exe`
+  with Chromium bundled straight in (~835MB; Ethan's call — "don't care about size, just make
+  it work"). Fixed a real bug found only by actually running the frozen build: it was
+  resolving Chromium's path to an empty bundle-relative folder instead of the real shared
+  cache, silently trying to re-download every launch. `app.py`'s `_ensure_chromium()` now
+  checks bundled copy → system cache → download-as-last-resort, and does a REAL
+  launch-and-close (not just a file-exists check). Pushing verification further (real
+  navigation, not just launch) then caught a SECOND, bigger bug: the frozen app couldn't see
+  any of your real `profile.json`/`config.json`/`jobs.db` at all (empty dashboard, "0
+  listings") because `config.ROOT` resolved inside the frozen bundle's own internal folder,
+  not your real project directory — would have shipped a completely non-functional app
+  otherwise. Fixed (`config.py:_detect_root`); confirmed by copying real data into a frozen
+  build and seeing the real listing count. Pushed once more and caught a THIRD bug: the
+  Apply and Run-queue buttons shell out via `sys.executable` + a `main.py` path, both
+  meaningless once frozen — clicking Apply would have silently relaunched the GUI instead
+  of actually applying to a job. Fixed (`app.py` dispatches CLI args itself when frozen;
+  `dashboard.py:_cli_command`); verified for real by running `JobSearchAgent.exe attempts`
+  and seeing it print real data instead of opening a window. Verified across many real
+  frozen builds total, never assumed a fix worked. See `PACKAGING.md` for detail.
+- ✅ AFTER_LAUNCH's Match Coach (resume rewrite suggestions) built end-to-end — separate list,
+  full detail in `AFTER_LAUNCH.md`.
+- ✅ `scan` now auto-summarizes new jobs (best-effort, capped, silent if Ollama's off) — Ethan
+  wants the whole tool as automatic as possible.
+
 **Still open (need Ethan / the host):**
 1. **Prove breadth (needs you):** run the filler on ONE new employer with the browser visible, capture the field dump, re-run the mapping test on it — confirms it's not a Citi fluke.
 2. **Wire guardrail + field-map into the LIVE filler** (`jobagent/workday/filler.py`): I left this un-touched on purpose — it's 2,200 lines that can only be verified against a real browser. Needs a host session.
-3. **Build/freeze the desktop app on the host** (PyInstaller + Chromium bundling) and code-sign it — see `PACKAGING.md`.
+3. **Code-sign the frozen exe** (needs your identity + a certificate purchase — see `PACKAGING.md` §3) and prove the frozen app can drive a real Workday application end-to-end (needs a real login).

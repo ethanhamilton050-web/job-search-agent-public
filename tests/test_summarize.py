@@ -40,6 +40,10 @@ def test_match_breakdown():
     assert empty == {"matched": [], "missing": [], "notes": []}
 
 
+def test_ollama_reachable_false_when_box_down():
+    assert not s.ollama_reachable(base="http://127.0.0.1:1", timeout=1)
+
+
 def test_ai_summary_never_raises_when_box_down():
     # Unroutable port -> returns None, not an exception (dashboard must not break).
     assert s.ai_summary("desc", base="http://127.0.0.1:1", timeout=1) is None

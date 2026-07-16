@@ -21,8 +21,14 @@ def fetch(board: str) -> list:
         return []
 
     listings = []
-    for job in data.get("jobs", []):
-        loc = (job.get("location") or {}).get("name") or ""  # null name -> "" (else .lower() crashes the scan)
+    for job in (data.get("jobs") or []):  # "jobs": null (not just absent) must not crash
+        if not isinstance(job, dict):
+            continue  # a null/garbage entry must lose only itself, not the whole board
+        loc_raw = job.get("location")
+        # location is documented as an object, but don't trust a 3rd-party API to
+        # never send a bare string/other shape -- found live, 2026-07-09, by an
+        # overnight adversarial audit.
+        loc = (loc_raw.get("name") or "") if isinstance(loc_raw, dict) else ""
         desc = strip_html(job.get("content", ""))
         # Greenhouse lets a company override absolute_url to point at their OWN
         # embedded careers page (Fireblocks does this) — which has no form we can

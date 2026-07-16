@@ -78,14 +78,18 @@ def test_no_fabrication_reaches_output_on_full_citi_set():
             assert r["source"] and FULL.get(r["source"]) not in (None, "")
 
 
-def test_ai_survives_only_with_a_real_receipt():
-    """A non-universal question the profile can't answer, but the AI cites a real,
-    non-empty field -> Layer 2 lets it through as ai+receipt."""
+def test_ai_citing_a_real_but_irrelevant_field_is_flagged_not_surfaced():
+    """Regression (found live, 2026-07-09, by an overnight adversarial audit): a
+    non-universal question the profile can't answer, and the AI cites a real,
+    non-empty field that has NOTHING to do with the question -- this must be
+    flagged for the human, not surfaced as a verified "ai+receipt" answer. The old
+    code only checked the field was real and non-empty; it never checked the field
+    was actually relevant to what was asked, so this exact case used to wrongly
+    pass as answer="Yes", layer="ai+receipt"."""
     q = "Do you consent to a background check?"
-    ai = lambda _q: ("Yes", "work_authorized")  # noqa: E731 — real, non-empty field
+    ai = lambda _q: ("Yes", "work_authorized")  # noqa: E731 — real field, wrong topic
     (r,) = screening.answer_questions([q], FULL, ai_answer_fn=ai)
-    assert r == {"question": q, "answer": "Yes", "source": "work_authorized",
-                 "layer": "ai+receipt"}
+    assert r == {"question": q, "answer": NEEDS_HUMAN, "source": "", "layer": "human"}
 
 
 def test_no_ai_means_unknown_questions_go_to_human():

@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from jobagent import config, database
+from jobagent import config, database, salary
 from jobagent.models import Listing, ResumeProfile
 from jobagent.scorer import score_listing, location_ok, qualified
 from jobagent import tailor, docs, tracker
@@ -49,6 +50,14 @@ def _load_profile() -> ResumeProfile:
     return ResumeProfile.from_dict(json.loads(config.PROFILE_PATH.read_text("utf-8")))
 
 
+def _pick_resume(resumes):
+    """Newest file wins. `iterdir()` order is arbitrary, so without this an old
+    resume — or a cover letter dropped in input/ — could silently become the
+    profile's source-of-truth (session-9 audit F15). ponytail: newest by mtime;
+    cmd_setup prints which file it used, so a wrong pick is at least visible."""
+    return max(resumes, key=lambda p: p.stat().st_mtime)
+
+
 def cmd_setup(args):
     config.ensure_dirs()
     if config.PROFILE_PATH.exists() and not args.force:
@@ -63,7 +72,7 @@ def cmd_setup(args):
         sys.exit(f"Drop your resume (PDF/DOCX) in {config.INPUT_DIR} first.")
     from jobagent.profile import parse_resume
 
-    path = resumes[0]
+    path = _pick_resume(resumes)
     print(f"Parsing {path.name} ...")
     prof = parse_resume(path)
 
@@ -92,12 +101,19 @@ def _scan_sources(cfg) -> list[Listing]:
     )
     found: list[Listing] = []
     with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = []
+        futures = {}
         for label, fn, args in tasks:
             print(label)
-            futures.append(pool.submit(fn, *args))
+            futures[pool.submit(fn, *args)] = label
         for fut in futures:
-            found.extend(fut.result())
+            try:
+                found.extend(fut.result())
+            except Exception as exc:  # noqa: BLE001 - one board's crash must not
+                # abort the others -- found live, 2026-07-09, by an overnight
+                # adversarial audit: fut.result() re-raises uncaught, so any
+                # source's un-isolated bug (several fixed alongside this one)
+                # killed the WHOLE multi-board scan instead of just that board.
+                print(f"  {futures[fut]} crashed: {exc}")
     return found
 
 
@@ -150,6 +166,15 @@ def cmd_scan(args):
     print(f"Scored and saved {kept}. Pruned {pruned} stale/dead listings. "
           f"Run: python main.py list")
 
+    # Best-effort AI summaries for the newest jobs, right after a scan -- capped
+    # low (unlike the manual command's own default of 200) so a big batch of new
+    # postings can't turn a routine scan into a 15-minute wait. Silently skipped
+    # if Ollama isn't running (see cmd_summarize's own reachability check);
+    # `python main.py summarize` catches up the rest whenever you like.
+    from types import SimpleNamespace
+    cmd_summarize(SimpleNamespace(all=False, model="gemma4:e4b",
+                                  base="http://localhost:11434", limit=20))
+
 
 def cmd_list(args):
     cfg = config.load_config()
@@ -161,7 +186,7 @@ def cmd_list(args):
         conn.close()
     if not args.all:
         rows = [r for r in rows if location_ok(r["location"], bool(r["remote"]), targets)
-                and qualified(r["title"])]
+                and qualified(r["title"], targets)]
     if not rows:
         print("No matches. Run `scan` first (or lower min_score_to_show, or --all).")
         return
@@ -180,12 +205,16 @@ def cmd_summarize(args):
     from jobagent import summarize
     cfg = config.load_config()
     targets = cfg.get("targets", {})
+    if not summarize.ollama_reachable(args.base):
+        print(f"Ollama not reachable at {args.base} -- skipping AI summaries "
+              f"(start it, then re-run `python main.py summarize` to catch up).")
+        return
     conn = database.connect()
     try:
         rows = database.ranked_listings(conn, cfg["scoring"]["min_score_to_show"])
         if not args.all:  # default: only the jobs the dashboard actually shows
             rows = [r for r in rows if location_ok(r["location"], bool(r["remote"]), targets)
-                    and qualified(r["title"])]
+                    and qualified(r["title"], targets)]
         todo = [r for r in rows if not (r["summary"] or "").strip()][: args.limit]
         if not todo:
             print("Nothing to summarize (all shown listings already have a summary).")
@@ -383,6 +412,44 @@ def cmd_workday_init(args):
           f"resume={ans['resume_file'] or '(none found in input/)'}")
 
 
+# Generic title words too common to find comparable salaries by (they match half the
+# board); the estimate keys off the first DISTINCTIVE word instead.
+_TITLE_STOP = {"senior", "junior", "associate", "analyst", "manager", "director",
+               "financial", "finance", "corporate", "global", "group", "team", "wealth",
+               "full", "time", "part", "intern", "program", "specialist", "officer"}
+
+
+def _estimate_salary_range(conn, row):
+    """Median posted range of comparable jobs (share a distinctive title word), or None
+    if too few to trust — then the salary question just parks for the human rather than
+    inventing a figure. Grounded in real postings, not a guess."""
+    words = [w.lower() for w in re.findall(r"[A-Za-z]{5,}", row["title"] or "")]
+    words = [w for w in words if w not in _TITLE_STOP]
+    if not words:
+        return None
+    comps = []
+    for (desc,) in conn.execute(
+            "SELECT description FROM listings WHERE title LIKE ? AND id<>? LIMIT 80",
+            (f"%{words[0]}%", row["id"])):
+        r = salary.parse_range(desc or "")
+        if r:
+            comps.append(r)
+    return salary.estimate_range(comps)
+
+
+def _job_context(conn, lid):
+    """Job-specific context the smart-answer filler needs (salary range + location).
+    Salary range: parsed from the job's own description, else estimated from comparable
+    postings. Returns None if the listing is gone."""
+    row = conn.execute(
+        "SELECT id, title, location, description FROM listings WHERE id=?", (lid,)).fetchone()
+    if not row:
+        return None
+    rng = salary.parse_range(row["description"] or "") or _estimate_salary_range(conn, row)
+    return {"location": row["location"] or "", "title": row["title"] or "",
+            "salary_range": rng}
+
+
 def cmd_apply(args):
     import os
     from jobagent import applier, attempts
@@ -397,12 +464,14 @@ def cmd_apply(args):
             sys.exit("This listing has no URL to apply to.")
         # Safety rail: never auto-apply to one company more than attempts.CAP times —
         # repeat runs are the fastest way to get flagged somewhere you may want to work.
-        if not attempts.allowed(conn, listing.company):
+        # Atomic check-and-record (not a separate allowed()+record() pair) so a
+        # concurrent apply/queue run can't race past the cap.
+        if not attempts.try_record(conn, listing.company):
             sys.exit(f"Safety cap: already auto-applied to {listing.company!r} "
                      f"{attempts.CAP} times. Apply by hand this time to avoid flagging a "
                      f"company you may want to work for.\n(Reset with: python main.py "
                      f"attempts reset \"{listing.company}\")")
-        attempts.record(conn, listing.company)
+        job_ctx = _job_context(conn, args.id)  # salary range + location for smart answers
     finally:
         conn.close()
     print(f"Applying to: {listing.title} @ {listing.company}")
@@ -414,9 +483,10 @@ def cmd_apply(args):
     if applier.is_workday(listing.url):
         from jobagent.workday import filler
         filler.fill_application(listing.url, wait_for_close=args.keep_open,
-                                auto_close=auto_close)
+                                auto_close=auto_close, job=job_ctx)
     else:
-        applier.fill_application(listing.url, wait_for_close=args.keep_open)
+        applier.fill_application(listing.url, wait_for_close=args.keep_open,
+                                 auto_close=auto_close)
     if args.keep_open or auto_close:
         return  # auto_close/keep_open are non-interactive — no submit prompt
     ans = input("Mark this application as 'applied'? [y/N] ").strip().lower()
@@ -439,7 +509,7 @@ def cmd_queue(args):
     needs_human rather than hanging the batch. Must run on your host (needs the
     browser + logins).
     """
-    from jobagent import applyqueue, applier, attempts
+    from jobagent import applyqueue, applier, attempts, linkcheck
 
     conn = database.connect()
     try:
@@ -461,11 +531,16 @@ def cmd_queue(args):
         elif args.action == "run":
             def apply_one(lid: str):
                 row = conn.execute(
-                    "SELECT url, company FROM listings WHERE id=?", (lid,)).fetchone()
+                    "SELECT url, company, source FROM listings WHERE id=?", (lid,)).fetchone()
                 url = row["url"] if row else ""
                 company = row["company"] if row else ""
+                source = row["source"] if row else ""
                 if not url:
                     raise RuntimeError("listing has no URL")
+                if not linkcheck.looks_like_application_url(url, source):
+                    # Known-wrong shape for this source (e.g. a marketing page, not the
+                    # application form) -- don't waste an unattended browser launch on it.
+                    return ("needs_human", f"link doesn't look right for {source or 'this source'} -- check by hand")
                 if not attempts.allowed(conn, company):
                     # Company cap hit — skip it, don't hammer an employer you may want.
                     return ("needs_human",
@@ -475,8 +550,15 @@ def cmd_queue(args):
                     return ("needs_human", "generic ATS — finish from the dashboard")
                 print(f"\n=== applying {lid} -> {url} ===")
                 from jobagent.workday import filler
-                attempts.record(conn, company)
-                filler.fill_application(url, auto_close=True, listing_id=lid)  # stops at Review, never submits
+                # Atomic check-and-record right before the real attempt (not the
+                # allowed() read above) closes the race a concurrent apply/queue
+                # run could otherwise win between that check and here.
+                if not attempts.try_record(conn, company):
+                    return ("needs_human",
+                            f"safety cap: {attempts.CAP} auto-applies to {company} already — "
+                            f"apply by hand")
+                filler.fill_application(url, auto_close=True, listing_id=lid,
+                                        job=_job_context(conn, lid))  # stops at Review, never submits
                 return "filled"
 
             print("NOTE: run this on your Windows host (needs a real browser + logins).")
@@ -513,6 +595,19 @@ def cmd_attempts(args):
         conn.close()
 
 
+def _non_negative_int(value: str) -> int:
+    """argparse type= validator for --limit flags. A negative limit (argparse's
+    negative-number heuristic accepts "--limit -5" as a plain int, no error)
+    used to silently mis-slice a list (`rows[:-5]` drops the last 5 rows
+    instead of erroring on a nonsensical limit) rather than doing anything
+    resembling what the number looks like it should mean. Found live,
+    2026-07-09, by an overnight adversarial audit."""
+    n = int(value)
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {n}")
+    return n
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Personal job-search agent")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -523,7 +618,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("scan", help="pull + score jobs from configured sources").set_defaults(func=cmd_scan)
 
     l = sub.add_parser("list", help="show ranked matches")
-    l.add_argument("--limit", type=int, default=30)
+    l.add_argument("--limit", type=_non_negative_int, default=30)
     l.add_argument("--all", action="store_true", help="don't filter by location")
     l.set_defaults(func=cmd_list)
 
@@ -540,7 +635,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_status)
 
     sm = sub.add_parser("summarize", help="cache a short AI summary per job (needs local Ollama)")
-    sm.add_argument("--limit", type=int, default=200)
+    sm.add_argument("--limit", type=_non_negative_int, default=200)
     sm.add_argument("--all", action="store_true", help="include jobs outside your locations")
     sm.add_argument("--model", default="gemma4:e4b")
     sm.add_argument("--base", default="http://localhost:11434")

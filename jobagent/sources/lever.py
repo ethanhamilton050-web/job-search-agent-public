@@ -18,7 +18,11 @@ def _to_iso_date(created_at) -> str:
         return datetime.datetime.fromtimestamp(
             int(created_at) / 1000, tz=datetime.timezone.utc
         ).date().isoformat()
-    except (TypeError, ValueError, OSError):
+    except (TypeError, ValueError, OSError, OverflowError):
+        # Python's json module accepts Infinity/-Infinity, and int(float('inf'))
+        # raises OverflowError (not caught by the types above) -- found live,
+        # 2026-07-09, by an overnight adversarial audit. A very large-but-finite
+        # createdAt can also overflow datetime.fromtimestamp() on some platforms.
         return ""
 
 
@@ -36,6 +40,8 @@ def fetch(board: str) -> list:
 
     listings = []
     for job in data:
+        if not isinstance(job, dict):
+            continue  # a null/garbage entry must lose only itself, not the whole board
         cats = job.get("categories", {}) or {}
         loc = cats.get("location") or ""  # null location -> "" (matches the idiom below)
         desc = strip_html(job.get("descriptionPlain") or job.get("description", ""))
